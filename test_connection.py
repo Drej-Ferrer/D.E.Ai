@@ -1,22 +1,16 @@
-﻿from hdbcli import dbapi
-from dotenv import load_dotenv
-import os
+"""
+Standalone connectivity check: confirms the SAP HANA cert (hana_server.pem)
+validates correctly before you run the full bot.
 
-load_dotenv("lark-hana.env", override=True)
+Run with:  python test_connection.py
+"""
 
-config = {
-    "address": os.getenv("SAP_HOST"),
-    "port": int(os.getenv("SAP_PORT", 30015)),
-    "user": os.getenv("SAP_USER"),
-    "password": os.getenv("SAP_PASSWORD"),
-    "currentSchema": os.getenv("SAP_SCHEMA"),
-    "encrypt": True,
-    "sslValidateCertificate": True,
-    "sslHostNameInCertificate": "DIRECHANASERVER"
-}
+from hdbcli import dbapi
+
+from modules import config
 
 try:
-    conn = dbapi.connect(**config)
+    conn = dbapi.connect(**config.HANA_CONFIG)
     print("Connected successfully with validated cert.")
     conn.close()
 except Exception as e:

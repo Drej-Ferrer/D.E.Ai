@@ -464,7 +464,13 @@ not $."""
         narrative, _ = _filter_narrative_lines(narrative, raw_data, record_count, total)
 
     if record_count > 0:
-        capped_warning = " *(Capped at max limit)*" if record_count >= config.MAX_ROWS else ""
+        # NOTE: this must track the real fetchmany() cap used across
+        # database.py's query functions (currently 3000), not
+        # config.MAX_ROWS (default 50) -- MAX_ROWS is not actually
+        # enforced on any query, so comparing against it here previously
+        # mislabeled ordinary <=3000-row results as "capped" once they
+        # passed 50 rows, even when nothing was actually truncated.
+        capped_warning = " *(Capped at max limit)*" if record_count >= database.QUERY_ROW_CAP else ""
         if total is not None:
             stats_line = f"Showing **{record_count}** matching record(s){capped_warning} — combined {total_label}: **₱{total:,.2f}**."
         else:

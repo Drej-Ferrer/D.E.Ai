@@ -14,6 +14,15 @@ from hdbcli import dbapi
 from modules import config
 from modules.config import audit_log
 
+# Real, enforced row ceiling for all query functions below. This used to
+# be a hardcoded 3000 sprinkled across every function, disconnected from
+# config.MAX_ROWS (which was defined but never actually applied to a
+# fetchmany() call) -- ai_router's "(Capped at max limit)" warning
+# compared against MAX_ROWS instead of this, so it fired on any
+# 50+ row result even when nothing was truncated. Single source of
+# truth now; ai_router imports this same constant for that warning.
+QUERY_ROW_CAP = 3000
+
 # ==========================================
 # Circuit Breaker (protects a flaky/overloaded HANA instance)
 # ==========================================
@@ -77,8 +86,21 @@ def _clean(val):
 
 def _get_connection_for_user(lark_user_id: str):
     """
-    TEMPORARY TESTING MODE: Bypasses DEAI_USER_MAP and uses the master HANA config
-    so all test queries succeed. Role security will be re-enabled later.
+    ⚠️ NOT PER-USER SCOPED. Every caller in this file passes lark_user_id
+    down to here expecting it to select a scoped/mapped SAP identity via
+    DEAI_USER_MAP -- it doesn't. Every Lark user who can message the bot
+    currently gets the SAME master HANA_CONFIG connection (read-only
+    enforced at the app layer, not by DB grants -- see
+    _enforce_read_only). lark_user_id is accepted and logged
+    ("Querying DEAI_USER_MAP...") but not actually used to restrict
+    access.
+
+    Before this bot is exposed beyond a fully-trusted user group, either:
+      (a) implement real per-user credential lookup against DEAI_USER_MAP
+          and connect with that user's own SAP-side read role, or
+      (b) if single-shared-identity access is the intended design, remove
+          the DEAI_USER_MAP references/log lines elsewhere so they don't
+          imply a security boundary that doesn't exist.
     """
     time.sleep(0.5)
     return dbapi.connect(**config.HANA_CONFIG)
@@ -109,7 +131,7 @@ def query_sap_hana(item_code, lark_user_id):
         _set_session_read_only(cursor)
         sql = 'SELECT "ItemCode", "ItemName", "OnHand" FROM "OITM" WHERE "ItemCode" = ?'
         _safe_execute(cursor, sql, (item_code,))
-        rows = cursor.fetchmany(3000)
+        rows = cursor.fetchmany(QUERY_ROW_CAP)
         _record_db_success()
         if not rows:
             return f"No records found for item code: {item_code}"
@@ -138,7 +160,7 @@ def query_sap_invoices_for_llm(lark_user_id):
         _set_session_read_only(cursor)
         sql = 'SELECT "DocNum", "CardName", "DocDate", "DocTotal" FROM "OINV" ORDER BY "DocDate" DESC'
         _safe_execute(cursor, sql)
-        rows = cursor.fetchmany(3000)
+        rows = cursor.fetchmany(QUERY_ROW_CAP)
         _record_db_success()
         if not rows:
             return "No invoice data found."
@@ -184,7 +206,7 @@ def query_sap_sales_by_period(period="month", start_date=None, end_date=None, la
             sql = 'SELECT "DocNum", "CardName", "DocDate", "DocTotal" FROM "OINV" WHERE "DocDate" >= ADD_DAYS(CURRENT_DATE, -30) ORDER BY "DocDate" DESC'
 
         _safe_execute(cursor, sql, params)
-        rows = cursor.fetchmany(3000)
+        rows = cursor.fetchmany(QUERY_ROW_CAP)
         _record_db_success()
 
         display_period = f"{start_date} to {end_date}" if period == "custom" else period.upper()
@@ -249,7 +271,7 @@ def query_sap_aging_invoices(lark_user_id):
         _set_session_read_only(cursor)
         sql = 'SELECT "DocNum", "CardName", "DocDate", "DocDueDate", "DocTotal" FROM "OINV" WHERE "DocStatus" = \'O\' AND "DocDueDate" < CURRENT_DATE ORDER BY "DocDueDate" ASC'
         _safe_execute(cursor, sql)
-        rows = cursor.fetchmany(3000)
+        rows = cursor.fetchmany(QUERY_ROW_CAP)
         _record_db_success()
         if not rows:
             return "No overdue open invoices found in the system."
@@ -596,7 +618,7 @@ def execute_dynamic_query(query_plan, lark_user_id):
             print(f"[DEBUG] Params: {sql_params}")
         
         _safe_execute(cursor, sql, tuple(sql_params) if sql_params else None)
-        rows = cursor.fetchmany(3000)
+        rows = cursor.fetchmany(QUERY_ROW_CAP)
         _record_db_success()
         
         if not rows:
@@ -705,7 +727,7 @@ def query_sap_gl_expense_report(expense_type, start_date, end_date, group_by, la
                 params = (start_date, end_date)
                 
             _safe_execute(cursor, sql, params)
-            rows = cursor.fetchmany(3000)
+            rows = cursor.fetchmany(QUERY_ROW_CAP)
             _record_db_success()
             
             if not rows:
@@ -740,7 +762,7 @@ def query_sap_gl_expense_report(expense_type, start_date, end_date, group_by, la
                 params = (start_date, end_date)
                 
             _safe_execute(cursor, sql, params)
-            rows = cursor.fetchmany(3000)
+            rows = cursor.fetchmany(QUERY_ROW_CAP)
             _record_db_success()
             
             if not rows:
